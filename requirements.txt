@@ -1,0 +1,5 @@
+duckdb>=1.1.0 # Motor OLAP que ejecuta SQL leyendo y escribiendo Parquet en disco
+pyarrow>=17.0.0 # Para inspeccionar metadatos del footer de los archivos Parquet
+pyyaml>=6.0.1 # Para parsear el contrato declarativo
+requests>=2.32.0 # Para descargar en streaming por HTTP con control de timeout y reintentos
+psutil>=6.0.0 # Para medir el pico de memoria RAM de los procesos

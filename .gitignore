@@ -1,0 +1,32 @@
+# Entorno virtual y Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Almacenamiento de datos del pipeline (Excluido según consigna)
+data/
+*.duckdb
+*.duckdb.tmp/
+*.tmp
+
+# dbt
+dbt_project/target/
+dbt_project/dbt_packages/
+dbt_project/logs/
+
+# Dagster
+.dagster/
+dagster_home/
+
+# Testing y cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs y SO
+.vscode/
+.idea/
+.DS_Store
