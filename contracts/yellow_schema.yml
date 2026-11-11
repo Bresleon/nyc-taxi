@@ -1,0 +1,146 @@
+version: "1.0.0"
+dataset: "nyc_tlc_yellow_trips"
+description: "Contrato de esquema destino para viajes de taxis amarillos de NYC (TLC)"
+extra_columns_policy: "warn_and_ignore"  # Si aparece una columna nueva no listada: alerta en log y la ignora en el SELECT
+
+columns:
+  - source_name: "VendorID"
+    aliases: ["vendorid", "vendor_id"]
+    target_name: "vendor_id"
+    expected_type: "BIGINT"
+    type_family: "INTEGER"
+    required: true
+
+  - source_name: "tpep_pickup_datetime"
+    aliases: []
+    target_name: "tpep_pickup_datetime"
+    expected_type: "TIMESTAMP"
+    type_family: "TIMESTAMP"
+    required: true
+
+  - source_name: "tpep_dropoff_datetime"
+    aliases: []
+    target_name: "tpep_dropoff_datetime"
+    expected_type: "TIMESTAMP"
+    type_family: "TIMESTAMP"
+    required: true
+
+  - source_name: "passenger_count"
+    aliases: []
+    target_name: "passenger_count"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "trip_distance"
+    aliases: []
+    target_name: "trip_distance"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "RatecodeID"
+    aliases: ["ratecodeid", "ratecode_id"]
+    target_name: "ratecode_id"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "store_and_fwd_flag"
+    aliases: []
+    target_name: "store_and_fwd_flag"
+    expected_type: "VARCHAR"
+    type_family: "STRING"
+    required: true
+
+  - source_name: "PULocationID"
+    aliases: ["pulocationid", "pu_location_id"]
+    target_name: "pu_location_id"
+    expected_type: "BIGINT"
+    type_family: "INTEGER"
+    required: true
+
+  - source_name: "DOLocationID"
+    aliases: ["dolocationid", "do_location_id"]
+    target_name: "do_location_id"
+    expected_type: "BIGINT"
+    type_family: "INTEGER"
+    required: true
+
+  - source_name: "payment_type"
+    aliases: []
+    target_name: "payment_type"
+    expected_type: "BIGINT"
+    type_family: "INTEGER"
+    required: true
+
+  - source_name: "fare_amount"
+    aliases: []
+    target_name: "fare_amount"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "extra"
+    aliases: []
+    target_name: "extra"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "mta_tax"
+    aliases: []
+    target_name: "mta_tax"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "tip_amount"
+    aliases: []
+    target_name: "tip_amount"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "tolls_amount"
+    aliases: []
+    target_name: "tolls_amount"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "improvement_surcharge"
+    aliases: []
+    target_name: "improvement_surcharge"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "total_amount"
+    aliases: []
+    target_name: "total_amount"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "congestion_surcharge"
+    aliases: []
+    target_name: "congestion_surcharge"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "Airport_fee"
+    aliases: ["airport_fee"]
+    target_name: "airport_fee"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: true
+
+  - source_name: "cbd_congestion_fee"
+    aliases: ["CBD_congestion_fee"]
+    target_name: "cbd_congestion_fee"
+    expected_type: "DOUBLE"
+    type_family: "NUMERIC"
+    required: false
+    default_value: 0.0
