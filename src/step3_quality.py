@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
+
 import duckdb
 
-from src.config import MonthPeriod, QUARANTINE_DIR
+from src.config import QUARANTINE_DIR, MonthPeriod
 
 
 @dataclass(frozen=True)
@@ -257,14 +258,14 @@ def run_quality_gate_for_month(
                     CASE WHEN r07_violated THEN 'R07_EXACT_DUPLICATE_ROW' END,
                     CASE WHEN r08_violated THEN 'R08_IMPOSSIBLE_DURATION_OR_SPEED' END
                 ],
-                x -> x IS NOT NULL
+                lambda x: x IS NOT NULL
             ) AS violated_reject_rules,
             LIST_FILTER(
                 [
                     CASE WHEN r05_warning THEN 'R05_NULL_OR_ZERO_PASSENGERS' END,
                     CASE WHEN r09_warning THEN 'R09_EXCESSIVE_PASSENGER_COUNT' END
                 ],
-                x -> x IS NOT NULL
+                lambda x: x IS NOT NULL
             ) AS warning_flags
         FROM rule_flags;
     """)
