@@ -5,3 +5,9 @@ PYTHON ?= python3
 
 setup:
 	$(PYTHON) -m pip install -r requirements.txt
+
+all:
+	$(PYTHON) -m src.pipeline --mes $(MES)
+
+clean:
+	rm -rf data/
