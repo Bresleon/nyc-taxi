@@ -13,7 +13,7 @@ SELECT
     COUNT(*) AS cantidad_viajes,
     ROUND(AVG(f.tip_pct), 2) AS propina_promedio_simple_pct,
     ROUND(SUM(f.tip_amount) * 100.0 / NULLIF(SUM(f.fare_amount), 0), 2) AS propina_ponderada_pct
-FROM fact_trips f
+FROM marts.fact_trips f
 WHERE f.fare_amount > 0
 GROUP BY 1, 2
 ORDER BY cantidad_viajes DESC;

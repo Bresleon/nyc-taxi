@@ -6,8 +6,8 @@ WITH stats_by_year AS (
         ROUND(AVG(f.total_amount), 2) AS avg_total_usd,
         ROUND(AVG(f.trip_duration_minutes), 2) AS avg_duration_min,
         ROUND(AVG(f.avg_speed_mph), 2) AS avg_speed_mph
-    FROM fact_trips f
-    JOIN dim_date d ON f.pickup_date_key = d.date_key
+    FROM marts.fact_trips f
+    JOIN marts.dim_date d ON f.pickup_date_key = d.date_key
     GROUP BY d.year
 )
 SELECT

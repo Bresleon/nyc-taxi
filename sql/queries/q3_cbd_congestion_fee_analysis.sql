@@ -6,8 +6,8 @@ WITH global_metric AS (
             SUM(CASE WHEN f.cbd_congestion_fee > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
             2
         ) AS global_pct_with_cbd_fee
-    FROM fact_trips f
-    JOIN dim_date d ON f.pickup_date_key = d.date_key
+    FROM marts.fact_trips f
+    JOIN marts.dim_date d ON f.pickup_date_key = d.date_key
     WHERE d.year = 2025
 ),
 zone_ranking AS (
@@ -21,9 +21,9 @@ zone_ranking AS (
             SUM(CASE WHEN f.cbd_congestion_fee > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
             2
         ) AS proporcion_cbd_fee_pct
-    FROM fact_trips f
-    JOIN dim_zone z ON f.pu_location_id = z.location_id
-    JOIN dim_date d ON f.pickup_date_key = d.date_key
+    FROM marts.fact_trips f
+    JOIN marts.dim_zone z ON f.pu_location_id = z.location_id
+    JOIN marts.dim_date d ON f.pickup_date_key = d.date_key
     WHERE d.year = 2025
     GROUP BY 1, 2, 3
     HAVING COUNT(*) >= 100
