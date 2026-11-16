@@ -5,9 +5,9 @@ WITH zone_yearly AS (
         z.zone_name,
         d.year,
         COUNT(*) AS trips
-    FROM fact_trips f
-    JOIN dim_zone z ON f.pu_location_id = z.location_id
-    JOIN dim_date d ON f.pickup_date_key = d.date_key
+    FROM marts.fact_trips f
+    JOIN marts.dim_zone z ON f.pu_location_id = z.location_id
+    JOIN marts.dim_date d ON f.pickup_date_key = d.date_key
     GROUP BY 1, 2, 3, 4
 ),
 pivoted AS (

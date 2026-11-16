@@ -1,0 +1,58 @@
+version: 2
+
+models:
+  - name: dim_zone
+    description: "Dimensión geográfica maestra de zonas de taxi."
+    columns:
+      - name: location_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_date
+    description: "Dimensión calendario."
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+
+  - name: fact_trips
+    description: "Tabla de hechos transaccional a nivel de viaje."
+    columns:
+      - name: trip_id
+        tests:
+          - not_null
+      - name: pu_location_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_zone')
+                field: location_id
+      - name: do_location_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_zone')
+                field: location_id
+      - name: pickup_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+  - name: agg_zone_hour
+    description: "Tabla agregada por zona de origen, fecha y hora."
+    columns:
+      - name: total_trips
+        tests:
+          - not_null
+
+  - name: mart_yoy_zone_performance
+    description: "Mart ejecutivo interanual 2024 vs 2025 por zona de origen."
+    columns:
+      - name: location_id
+        tests:
+          - unique
+          - not_null

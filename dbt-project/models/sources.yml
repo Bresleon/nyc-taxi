@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: curated
+    description: "Capa curada particionada (Hive) generada tras la compuerta de calidad en DuckDB."
+    meta:
+      external_location: "../data/curated/yellow/**/*.parquet"
+    tables:
+      - name: yellow_trips
+        description: "Viajes validados de taxis amarillos de NYC (2024 y 2025)."
+
+  - name: reference
+    description: "Tablas maestras de referencia oficial de la TLC."
+    meta:
+      external_location: "../data/raw/zones/taxi_zone_lookup.csv"
+    tables:
+      - name: taxi_zones
+        description: "Catálogo oficial de las 265 zonas de taxi de Nueva York."
