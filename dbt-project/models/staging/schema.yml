@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_tlc__taxi_zones
+    description: "Vista staging normalizada de zonas oficiales TLC."
+    columns:
+      - name: location_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_tlc__yellow_trips
+    description: "Vista staging estandarizada y filtrada por período de viajes curados."
+    columns:
+      - name: pickup_date_key
+        tests:
+          - not_null
+      - name: pu_location_id
+        tests:
+          - not_null
+      - name: do_location_id
+        tests:
+          - not_null
