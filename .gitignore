@@ -13,9 +13,10 @@ data/
 *.tmp
 
 # dbt
-dbt_project/target/
-dbt_project/dbt_packages/
-dbt_project/logs/
+dbt-project/target/
+dbt-project/dbt_packages/
+dbt-project/logs/
+dbt-project/.user.yml
 
 # Dagster
 .dagster/
