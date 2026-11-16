@@ -2,7 +2,8 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 import duckdb
 from dagster import (
     AssetExecutionContext,
@@ -17,13 +18,13 @@ from dagster import (
 
 from src.config import (
     CURATED_DIR,
-    MonthPeriod,
     PROJECT_ROOT,
     QUARANTINE_DIR,
     RAW_DIR,
     RESULTADOS_PATH,
     SQL_DIR,
     WAREHOUSE_PATH,
+    MonthPeriod,
     get_duckdb_connection,
     get_memory_usage_mb,
     parse_target_and_comparison_months,
@@ -33,7 +34,8 @@ from src.step2_schema import validate_and_standardize_month_schema
 from src.step3_quality import run_quality_gate_for_month
 from src.step4_transform import write_curated_partition
 from src.step5_model_and_queries import (
-    build_star_schema_and_answer_queries,
+    run_business_queries_and_export_md,
+    run_dbt_transformations,
 )
 
 
@@ -49,7 +51,9 @@ class PipelineRunConfig(Config):
     description="Descarga idempotente verificada por hash SHA-256 de los datos de TLC.",
     retry_policy=RetryPolicy(max_retries=3, delay=2),
 )
-def raw_taxi_data(context: AssetExecutionContext, config: PipelineRunConfig) -> Dict[str, Any]:
+def raw_taxi_data(
+    context: AssetExecutionContext, config: PipelineRunConfig
+) -> Dict[str, Any]:
     periods = parse_target_and_comparison_months(config.mes)
     con = get_duckdb_connection(WAREHOUSE_PATH)
     results = {}
@@ -66,7 +70,9 @@ def raw_taxi_data(context: AssetExecutionContext, config: PipelineRunConfig) -> 
         context.add_output_metadata(
             {
                 "mes_asignado": config.mes,
-                "periodos_procesados": MetadataValue.text(", ".join(p.label for p in periods)),
+                "periodos_procesados": MetadataValue.text(
+                    ", ".join(p.label for p in periods)
+                ),
                 "archivos_descargados": MetadataValue.json(downloaded_files),
                 "ram_rss_mb": MetadataValue.float(get_memory_usage_mb()),
             }
@@ -94,7 +100,11 @@ def quality_validated_data(
         zones_csv = RAW_DIR / "zones" / "taxi_zone_lookup.csv"
         for p in periods:
             parquet_path = (
-                RAW_DIR / "yellow" / f"year={p.year}" / f"month={p.month:02d}" / p.file_name
+                RAW_DIR
+                / "yellow"
+                / f"year={p.year}"
+                / f"month={p.month:02d}"
+                / p.file_name
             )
             # Validación de Esquema
             _, std_view = validate_and_standardize_month_schema(con, p, parquet_path)
@@ -124,45 +134,38 @@ def quality_validated_data(
 
 
 # ==============================================================================
-# ASSET 3: Modelo Dimensional y Marts (dbt Core / SQL)
+# ASSET 3: Modelo Dimensional y Marts (dbt Core)
 # ==============================================================================
 @asset(
     deps=[quality_validated_data],
     group_name="transformation_and_modeling",
-    description="Construcción del modelo dimensional estrella y tabla agregada de negocio.",
+    description="Construcción y testeo del modelo dimensional estrella usando dbt Core.",
 )
 def dimensional_star_schema(
     context: AssetExecutionContext, config: PipelineRunConfig
 ) -> Dict[str, int]:
     periods = parse_target_and_comparison_months(config.mes)
-    con = get_duckdb_connection(WAREHOUSE_PATH)
-    try:
-        build_star_schema_and_answer_queries(
-            con,
-            periods,
-            curated_base_dir=CURATED_DIR,
-            sql_dir=SQL_DIR,
-            resultados_path=RESULTADOS_PATH,
-        )
 
-        counts = {
-            "fact_trips": con.execute("SELECT COUNT(*) FROM fact_trips;").fetchone()[0],
-            "agg_zone_hour": con.execute("SELECT COUNT(*) FROM agg_zone_hour;").fetchone()[0],
-            "dim_zone": con.execute("SELECT COUNT(*) FROM dim_zone;").fetchone()[0],
-            "dim_date": con.execute("SELECT COUNT(*) FROM dim_date;").fetchone()[0],
+    # 1. dbt abre nyc_taxi.duckdb en modo exclusivo, crea las tablas y corre dbt test
+    run_dbt_transformations(periods)
+
+    # 2. Una vez cerrado dbt, Python consulta el modelo y exporta RESULTADOS.md
+    counts = run_business_queries_and_export_md(
+        periods,
+        warehouse_path=WAREHOUSE_PATH,
+        sql_dir=SQL_DIR,
+        resultados_path=RESULTADOS_PATH,
+    )
+
+    context.add_output_metadata(
+        {
+            "fact_trips_rows": MetadataValue.int(counts["fact_trips"]),
+            "agg_zone_hour_rows": MetadataValue.int(counts["agg_zone_hour"]),
+            "dim_zone_count": MetadataValue.int(counts["dim_zone"]),
+            "dim_date_count": MetadataValue.int(counts["dim_date"]),
+            "ram_rss_mb": MetadataValue.float(get_memory_usage_mb()),
         }
-
-        context.add_output_metadata(
-            {
-                "fact_trips_rows": MetadataValue.int(counts["fact_trips"]),
-                "agg_zone_hour_rows": MetadataValue.int(counts["agg_zone_hour"]),
-                "dim_zone_count": MetadataValue.int(counts["dim_zone"]),
-                "dim_date_count": MetadataValue.int(counts["dim_date"]),
-                "ram_rss_mb": MetadataValue.float(get_memory_usage_mb()),
-            }
-        )
-    finally:
-        con.close()
+    )
     return counts
 
 
@@ -177,7 +180,7 @@ def dimensional_star_schema(
 def business_results_markdown(context: AssetExecutionContext) -> str:
     if not RESULTADOS_PATH.exists():
         raise FileNotFoundError(f"No se encontró el archivo {RESULTADOS_PATH}")
-    
+
     file_size_kb = RESULTADOS_PATH.stat().st_size / 1024.0
     context.add_output_metadata(
         {
@@ -215,15 +218,13 @@ defs = Definitions(
 # ==============================================================================
 def execute_dagster_cli(mes: str) -> None:
     """
-    Ejecuta el job completo de Dagster usando el motor 'execute_in_process'.
-    Cumple con la consigna de correr con un solo comando sin requerir
-    demonios ni bases de datos externas activas.
+    Resuelve el job compilado dentro de Definitions y lo ejecuta usando
+    'execute_in_process'. Cumple con correr con un solo comando sin demonios.
     """
     print("=" * 80)
     print(f"[DAGSTER] Iniciando ejecución del grafo de assets para el mes: {mes}")
     print("=" * 80)
 
-    # Inyección limpia de configuración a los assets
     run_config = {
         "ops": {
             "raw_taxi_data": {"config": {"mes": mes}},
@@ -233,22 +234,31 @@ def execute_dagster_cli(mes: str) -> None:
     }
 
     t0 = time.perf_counter()
-    result = nyc_taxi_pipeline_job.execute_in_process(run_config=run_config)
+    resolved_job = defs.resolve_job_def("nyc_taxi_pipeline_job")
+    result = resolved_job.execute_in_process(run_config=run_config)
     elapsed = time.perf_counter() - t0
 
     if not result.success:
-        print("[DAGSTER ERROR] La corrida falló en alguno de los assets.", file=sys.stderr)
+        print(
+            "[DAGSTER ERROR] La corrida falló en alguno de los assets.", file=sys.stderr
+        )
         sys.exit(1)
 
     print("=" * 80)
-    print(f"[DAGSTER OK] Todos los assets fueron materializados con éxito en {elapsed:.2f} s.")
+    print(
+        f"[DAGSTER OK] Todos los assets fueron materializados con éxito en {elapsed:.2f} s."
+    )
     print("=" * 80)
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Dagster Runner para NYC Taxi Pipeline")
-    parser.add_argument("--mes", type=str, default="2025-03", help="Mes asignado (AAAA-MM)")
+    parser = argparse.ArgumentParser(
+        description="Dagster Runner para NYC Taxi Pipeline"
+    )
+    parser.add_argument(
+        "--mes", type=str, default="2025-03", help="Mes asignado (AAAA-MM)"
+    )
     args = parser.parse_args()
     execute_dagster_cli(mes=args.mes)
