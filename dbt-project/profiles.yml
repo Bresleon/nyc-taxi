@@ -1,0 +1,9 @@
+nyc_taxi_profile:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "../data/warehouse/nyc_taxi.duckdb"
+      threads: 4
+      extensions:
+        - parquet
