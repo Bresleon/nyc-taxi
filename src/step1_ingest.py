@@ -4,18 +4,24 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Iterator, List, Optional
 
+import dlt
 import duckdb
 import pyarrow.parquet as pq
 import requests
 
 from src.config import (
+    DATA_DIR,
     RAW_DIR,
     TLC_TRIP_URL_TEMPLATE,
     TLC_ZONE_LOOKUP_URL,
+    WAREHOUSE_PATH,
     MonthPeriod,
+    get_duckdb_connection,
 )
+
+DLT_PIPELINES_DIR = DATA_DIR / "dlt_state"
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -25,22 +31,6 @@ def compute_sha256(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             sha256.update(chunk)
     return sha256.hexdigest()
-
-
-def init_ingestion_log(con: duckdb.DuckDBPyConnection) -> None:
-    """Crea la tabla de control ingestion_log si no existe."""
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS ingestion_log (
-            file_name VARCHAR PRIMARY KEY,
-            url VARCHAR,
-            row_count BIGINT,
-            bytes BIGINT,
-            sha256 VARCHAR,
-            ingested_at TIMESTAMP,
-            status VARCHAR,
-            error_message VARCHAR
-        );
-    """)
 
 
 def download_file_with_backoff(
@@ -78,147 +68,305 @@ def download_file_with_backoff(
             time.sleep(wait_sec)
 
 
-def _record_log(
-    con: duckdb.DuckDBPyConnection,
-    file_name: str,
-    url: str,
-    row_count: int,
-    file_bytes: int,
-    sha256: Optional[str],
-    status: str,
-    error_message: Optional[str] = None,
-) -> None:
-    """Registra de forma idempotente (INSERT OR REPLACE) el resultado en ingestion_log."""
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    con.execute(
-        """
-        INSERT OR REPLACE INTO ingestion_log
-        (file_name, url, row_count, bytes, sha256, ingested_at, status, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """,
-        [file_name, url, row_count, file_bytes, sha256, now_utc, status, error_message],
-    )
+def _get_existing_logged_hash(
+    warehouse_path: Path, file_name: str
+) -> Optional[Dict[str, Any]]:
+    """Consulta si el archivo ya fue ingestado con éxito y devuelve su hash y filas."""
+    if not warehouse_path.exists():
+        return None
+    con = get_duckdb_connection(warehouse_path)
+    try:
+        exists = con.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = 'raw_dlt' AND table_name = 'ingestion_log';
+            """
+        ).fetchone()[0]
+        if not exists:
+            return None
 
-
-def ingest_month_parquet(
-    con: duckdb.DuckDBPyConnection,
-    period: MonthPeriod,
-    raw_base_dir: Path = RAW_DIR,
-    max_retries: int = 3,
-    base_wait: float = 2.0,
-) -> Path:
-    """
-    Descarga el archivo Parquet de un mes a data/raw/yellow/year=AAAA/month=MM/
-    garantizando idempotencia por verificación de existencia y hash SHA-256.
-    """
-    init_ingestion_log(con)
-    url = TLC_TRIP_URL_TEMPLATE.format(year=period.year, month=period.month)
-    dest_dir = (
-        raw_base_dir / "yellow" / f"year={period.year}" / f"month={period.month:02d}"
-    )
-    dest_path = dest_dir / period.file_name
-
-    # 1. Verificación de Idempotencia
-    if dest_path.exists():
-        disk_hash = compute_sha256(dest_path)
-        logged = con.execute(
+        row = con.execute(
             """
             SELECT sha256, row_count, bytes
-            FROM ingestion_log
+            FROM raw_dlt.ingestion_log
             WHERE file_name = ? AND status = 'ok'
+            ORDER BY ingested_at DESC
+            LIMIT 1;
             """,
-            [period.file_name],
-        ).fetchone()
-
-        if logged and logged[0] == disk_hash:
-            print(
-                f"[INGESTA] Idempotente OK: '{period.file_name}' ya existe y su hash "
-                f"SHA-256 ({disk_hash[:12]}...) coincide ({logged[1]:,} filas). No se re-descarga."
-            )
-            return dest_path
-        else:
-            # El archivo ya estaba en disco (ej. pre-descargado) pero aún no en ingestion_log
-            try:
-                row_count = pq.read_metadata(dest_path).num_rows
-                file_bytes = dest_path.stat().st_size
-                _record_log(
-                    con, period.file_name, url, row_count, file_bytes, disk_hash, "ok"
-                )
-                print(
-                    f"[INGESTA] Archivo local existente validado y registrado: "
-                    f"'{period.file_name}' ({row_count:,} filas)."
-                )
-                return dest_path
-            except Exception:
-                print(
-                    f"[INGESTA] Archivo local '{period.file_name}' corrupto o incompleto. Re-descargando..."
-                )
-
-    # 2. Descarga con reintentos y registro
-    try:
-        print(f"[INGESTA] Descargando {url} -> {dest_path} ...")
-        download_file_with_backoff(
-            url, dest_path, max_retries=max_retries, base_wait=base_wait
-        )
-        disk_hash = compute_sha256(dest_path)
-        file_bytes = dest_path.stat().st_size
-        # Leemos únicamente los metadatos del footer Parquet (no carga las filas en RAM)
-        row_count = pq.read_metadata(dest_path).num_rows
-
-        _record_log(con, period.file_name, url, row_count, file_bytes, disk_hash, "ok")
-        print(
-            f"[INGESTA] Completada '{period.file_name}': {row_count:,} filas | "
-            f"{file_bytes / (1024 * 1024):.2f} MB | SHA-256: {disk_hash[:16]}..."
-        )
-        return dest_path
-
-    except Exception as exc:
-        _record_log(con, period.file_name, url, 0, 0, None, "error", str(exc))
-        print(f"[ERROR CRÍTICO INGESTA] {exc}", file=sys.stderr)
-        sys.exit(1)
-
-
-def ingest_zone_lookup(
-    con: duckdb.DuckDBPyConnection,
-    raw_base_dir: Path = RAW_DIR,
-    max_retries: int = 3,
-    base_wait: float = 2.0,
-) -> Path:
-    """
-    Descarga la tabla maestra taxi_zone_lookup.csv una única vez de manera idempotente.
-    """
-    init_ingestion_log(con)
-    file_name = "taxi_zone_lookup.csv"
-    dest_path = raw_base_dir / "zones" / file_name
-
-    if dest_path.exists():
-        disk_hash = compute_sha256(dest_path)
-        logged = con.execute(
-            "SELECT sha256, row_count FROM ingestion_log WHERE file_name = ? AND status = 'ok'",
             [file_name],
         ).fetchone()
-        if logged and logged[0] == disk_hash:
-            print(
-                f"[INGESTA] Idempotente OK: '{file_name}' ya existe ({logged[1]} zonas)."
+        if row:
+            return {"sha256": row[0], "row_count": row[1], "bytes": row[2]}
+        return None
+    finally:
+        con.close()
+
+
+@dlt.source(name="nyc_tlc_source")
+def nyc_tlc_source(
+    periods: List[MonthPeriod],
+    raw_base_dir: Path = RAW_DIR,
+    warehouse_path: Path = WAREHOUSE_PATH,
+    max_retries: int = 3,
+    base_wait: float = 2.0,
+):
+    """
+    Fuente declarativa de dlt que:
+    1. Descarga de forma idempotente los archivos Parquet y CSV a data/raw/ sin modificarlos.
+    2. Registra el estado y trazabilidad en raw_dlt.ingestion_log (con estado 'ok' o 'error').
+    3. Carga los viajes y zonas hacia el esquema raw_dlt en DuckDB mediante PyArrow batches
+       (O(1) RAM), generando _dlt_loads y _dlt_version para auditoría nativa.
+    """
+    downloaded_parquets: List[tuple[MonthPeriod, Path, bool]] = []
+    zones_path_holder: Dict[str, Any] = {}
+
+    @dlt.resource(
+        name="ingestion_log",
+        write_disposition="merge",
+        primary_key="file_name",
+        columns={
+            "file_name": {"data_type": "text", "nullable": False},
+            "url": {"data_type": "text", "nullable": True},
+            "row_count": {"data_type": "bigint", "nullable": True},
+            "bytes": {"data_type": "bigint", "nullable": True},
+            "sha256": {"data_type": "text", "nullable": True},
+            "ingested_at": {"data_type": "timestamp", "nullable": True},
+            "status": {"data_type": "text", "nullable": True},
+            "error_message": {"data_type": "text", "nullable": True},
+        },
+    )
+    def ingestion_log_resource() -> Iterator[Dict[str, Any]]:
+        # 1. Descarga idempotente de tabla de zonas
+        zones_file = "taxi_zone_lookup.csv"
+        zones_dest = raw_base_dir / "zones" / zones_file
+        zones_is_new = True
+
+        if zones_dest.exists():
+            disk_hash = compute_sha256(zones_dest)
+            logged = _get_existing_logged_hash(warehouse_path, zones_file)
+            if logged and logged["sha256"] == disk_hash:
+                print(
+                    f"[DLT INGESTA] Idempotente OK: '{zones_file}' ya existe "
+                    f"({logged['row_count']} zonas). Omitiendo descarga."
+                )
+                zones_is_new = False
+                zones_path_holder["path"] = zones_dest
+                zones_path_holder["is_new"] = False
+                yield {
+                    "file_name": zones_file,
+                    "url": TLC_ZONE_LOOKUP_URL,
+                    "row_count": logged["row_count"],
+                    "bytes": logged["bytes"],
+                    "sha256": disk_hash,
+                    "ingested_at": datetime.now(timezone.utc),
+                    "status": "ok",
+                    "error_message": None,
+                }
+
+        if zones_is_new:
+            try:
+                if not zones_dest.exists():
+                    print(f"[DLT INGESTA] Descargando {TLC_ZONE_LOOKUP_URL} ...")
+                    download_file_with_backoff(
+                        TLC_ZONE_LOOKUP_URL, zones_dest, max_retries, base_wait
+                    )
+                disk_hash = compute_sha256(zones_dest)
+                file_bytes = zones_dest.stat().st_size
+                with open(zones_dest, "rb") as f:
+                    row_count = max(0, sum(1 for _ in f) - 1)
+                zones_path_holder["path"] = zones_dest
+                zones_path_holder["is_new"] = True
+                print(f"[DLT INGESTA] Completada '{zones_file}': {row_count} zonas.")
+                yield {
+                    "file_name": zones_file,
+                    "url": TLC_ZONE_LOOKUP_URL,
+                    "row_count": row_count,
+                    "bytes": file_bytes,
+                    "sha256": disk_hash,
+                    "ingested_at": datetime.now(timezone.utc),
+                    "status": "ok",
+                    "error_message": None,
+                }
+            except Exception as exc:
+                yield {
+                    "file_name": zones_file,
+                    "url": TLC_ZONE_LOOKUP_URL,
+                    "row_count": 0,
+                    "bytes": 0,
+                    "sha256": None,
+                    "ingested_at": datetime.now(timezone.utc),
+                    "status": "error",
+                    "error_message": str(exc),
+                }
+                raise
+
+        # 2. Descarga idempotente de archivos Parquet mensuales
+        for period in periods:
+            url = TLC_TRIP_URL_TEMPLATE.format(year=period.year, month=period.month)
+            dest_dir = (
+                raw_base_dir
+                / "yellow"
+                / f"year={period.year}"
+                / f"month={period.month:02d}"
             )
-            return dest_path
+            dest_path = dest_dir / period.file_name
+            needs_download = True
+
+            if dest_path.exists():
+                disk_hash = compute_sha256(dest_path)
+                logged = _get_existing_logged_hash(warehouse_path, period.file_name)
+                if logged and logged["sha256"] == disk_hash:
+                    print(
+                        f"[DLT INGESTA] Idempotente OK: '{period.file_name}' ya existe y su hash "
+                        f"SHA-256 ({disk_hash[:12]}...) coincide ({logged['row_count']:,} filas)."
+                    )
+                    needs_download = False
+                    downloaded_parquets.append((period, dest_path, False))
+                    yield {
+                        "file_name": period.file_name,
+                        "url": url,
+                        "row_count": logged["row_count"],
+                        "bytes": logged["bytes"],
+                        "sha256": disk_hash,
+                        "ingested_at": datetime.now(timezone.utc),
+                        "status": "ok",
+                        "error_message": None,
+                    }
+
+            if needs_download:
+                try:
+                    if not dest_path.exists():
+                        print(f"[DLT INGESTA] Descargando {url} -> {dest_path} ...")
+                        download_file_with_backoff(
+                            url, dest_path, max_retries, base_wait
+                        )
+                    disk_hash = compute_sha256(dest_path)
+                    file_bytes = dest_path.stat().st_size
+                    row_count = pq.read_metadata(dest_path).num_rows
+
+                    downloaded_parquets.append((period, dest_path, True))
+                    print(
+                        f"[DLT INGESTA] Completada '{period.file_name}': {row_count:,} filas | "
+                        f"{file_bytes / (1024 * 1024):.2f} MB | SHA-256: {disk_hash[:16]}..."
+                    )
+                    yield {
+                        "file_name": period.file_name,
+                        "url": url,
+                        "row_count": row_count,
+                        "bytes": file_bytes,
+                        "sha256": disk_hash,
+                        "ingested_at": datetime.now(timezone.utc),
+                        "status": "ok",
+                        "error_message": None,
+                    }
+                except Exception as exc:
+                    yield {
+                        "file_name": period.file_name,
+                        "url": url,
+                        "row_count": 0,
+                        "bytes": 0,
+                        "sha256": None,
+                        "ingested_at": datetime.now(timezone.utc),
+                        "status": "error",
+                        "error_message": str(exc),
+                    }
+                    raise
+
+    @dlt.resource(
+        name="taxi_zones",
+        write_disposition="replace",
+    )
+    def taxi_zones_resource():
+        import pyarrow.csv as pv
+
+        zones_dest: Optional[Path] = zones_path_holder.get("path")
+        if zones_dest and zones_dest.exists():
+            yield pv.read_csv(zones_dest)
+
+    @dlt.resource(
+        name="yellow_trips_raw",
+        write_disposition="replace",
+    )
+    def yellow_trips_raw_resource():
+        """
+        Lee los archivos Parquet descargados en bloques columnares PyArrow de 100,000 filas
+        para que dlt los cargue en DuckDB sin materializar diccionarios en RAM.
+        """
+        for period, parquet_path, _ in downloaded_parquets:
+            pf = pq.ParquetFile(parquet_path)
+            for batch in pf.iter_batches(batch_size=100_000):
+                yield (
+                    batch.to_pydict() if False else batch
+                )  # Entrega RecordBatch nativo a dlt
+
+    return [ingestion_log_resource, taxi_zones_resource, yellow_trips_raw_resource]
+
+
+def run_dlt_ingestion(
+    periods: List[MonthPeriod],
+    raw_base_dir: Path = RAW_DIR,
+    warehouse_path: Path = WAREHOUSE_PATH,
+    max_retries: int = 3,
+    base_wait: float = 2.0,
+) -> Dict[str, Any]:
+    """
+    Ejecuta el pipeline de dlt hacia DuckDB (esquema 'raw_dlt'), registra trazabilidad
+    nativa (_dlt_loads, _dlt_version) y expone una vista main.ingestion_log.
+    Si ocurre un error de red definitivo, registra el fallo y termina con sys.exit(1).
+    """
+    DLT_PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
+    warehouse_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pipeline = dlt.pipeline(
+        pipeline_name="nyc_taxi_ingestion",
+        pipelines_dir=str(DLT_PIPELINES_DIR),
+        destination=dlt.destinations.duckdb(str(warehouse_path)),
+        dataset_name="raw_dlt",
+    )
+
+    source = nyc_tlc_source(
+        periods=periods,
+        raw_base_dir=raw_base_dir,
+        warehouse_path=warehouse_path,
+        max_retries=max_retries,
+        base_wait=base_wait,
+    )
 
     try:
-        print(f"[INGESTA] Descargando tabla de zonas {TLC_ZONE_LOOKUP_URL} ...")
-        download_file_with_backoff(
-            TLC_ZONE_LOOKUP_URL, dest_path, max_retries=max_retries, base_wait=base_wait
-        )
-        disk_hash = compute_sha256(dest_path)
-        file_bytes = dest_path.stat().st_size
-        with open(dest_path, "rb") as f:
-            row_count = max(0, sum(1 for _ in f) - 1)
+        load_info = pipeline.run(source)
+        # Verificar si algún paquete de carga reportó fallos internos en dlt
+        load_info.raise_on_failed_jobs()
 
-        _record_log(
-            con, file_name, TLC_ZONE_LOOKUP_URL, row_count, file_bytes, disk_hash, "ok"
-        )
-        print(f"[INGESTA] Completada '{file_name}': {row_count} zonas.")
-        return dest_path
+        # Crear vista de compatibilidad main.ingestion_log apuntando a raw_dlt.ingestion_log
+        con = get_duckdb_connection(warehouse_path)
+        try:
+            con.execute("""
+                CREATE OR REPLACE VIEW main.ingestion_log AS
+                SELECT
+                    file_name,
+                    url,
+                    row_count,
+                    bytes,
+                    sha256,
+                    ingested_at,
+                    status,
+                    error_message,
+                    _dlt_load_id
+                FROM raw_dlt.ingestion_log;
+            """)
+            total_rows = con.execute(
+                "SELECT COALESCE(SUM(row_count), 0) FROM main.ingestion_log WHERE file_name LIKE 'yellow_tripdata_%';"
+            ).fetchone()[0]
+        finally:
+            con.close()
+
+        print(f"[DLT OK] Paquete(s) cargados: {load_info.loads_ids}")
+        return {
+            "loads_ids": list(load_info.loads_ids),
+            "total_rows_logged": int(total_rows),
+        }
+
     except Exception as exc:
-        _record_log(con, file_name, TLC_ZONE_LOOKUP_URL, 0, 0, None, "error", str(exc))
-        print(f"[ERROR CRÍTICO INGESTA ZONAS] {exc}", file=sys.stderr)
+        print(f"[ERROR CRÍTICO INGESTA DLT] {exc}", file=sys.stderr)
         sys.exit(1)
