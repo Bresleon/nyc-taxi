@@ -1,4 +1,4 @@
-duckdb>=1.1.0 # Motor OLAP que ejecuta SQL leyendo y escribiendo Parquet en disco
+duckdb>=1.5.6 # Motor OLAP que ejecuta SQL leyendo y escribiendo Parquet en disco
 pyarrow>=17.0.0 # Para inspeccionar metadatos del footer de los archivos Parquet
 pyyaml>=6.0.1 # Para parsear el contrato declarativo
 requests>=2.32.0 # Para descargar en streaming por HTTP con control de timeout y reintentos
@@ -8,3 +8,4 @@ dbt-duckdb>=1.8.0
 dagster>=1.8.0
 dagster-dbt>=0.24.0
 dagster-webserver>=1.13.30
+dlt[duckdb]>=1.4.0
