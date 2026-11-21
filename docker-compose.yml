@@ -1,0 +1,79 @@
+services:
+  dagster:
+    build: .
+    container_name: nyc_taxi_dagster
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src:/opt/dagster/app/src
+      - ./contracts:/opt/dagster/app/contracts
+      - ./dbt-project:/opt/dagster/app/dbt-project
+      - ./sql:/opt/dagster/app/sql
+      - ./data:/opt/dagster/app/data
+      - ./RESULTADOS.md:/opt/dagster/app/RESULTADOS.md
+      - ./OBSERVABILIDAD.md:/opt/dagster/app/OBSERVABILIDAD.md
+      - ./data/dagster_home:/opt/dagster/dagster_home/storage
+    environment:
+      - DAGSTER_HOME=/opt/dagster/dagster_home
+      - HOME=/tmp
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/server_info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: nyc_taxi_dozzle
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+
+  cadvisor:
+    image: python:3.12-slim
+    container_name: nyc_taxi_cadvisor
+    restart: unless-stopped
+    command: ["python3", "/exporter/docker_exporter.py"]
+    volumes:
+        - ./monitoring/docker_exporter.py:/exporter/docker_exporter.py:ro
+        - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nyc_taxi_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2d"
+      - "--storage.tsdb.retention.size=256MB"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - cadvisor
+    mem_limit: 256m
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nyc_taxi_grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    mem_limit: 256m
