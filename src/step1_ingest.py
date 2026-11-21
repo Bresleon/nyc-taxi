@@ -115,11 +115,9 @@ def nyc_tlc_source(
     Fuente declarativa de dlt que:
     1. Descarga de forma idempotente los archivos Parquet y CSV a data/raw/ sin modificarlos.
     2. Registra el estado y trazabilidad en raw_dlt.ingestion_log (con estado 'ok' o 'error').
-    3. Carga los viajes y zonas hacia el esquema raw_dlt en DuckDB mediante PyArrow batches
-       (O(1) RAM), generando _dlt_loads y _dlt_version para auditoría nativa.
+    3. Encadena transformers determinísticos hacia raw_dlt.taxi_zones y raw_dlt.yellow_trips_raw
+       mediante PyArrow batches (O(1) RAM).
     """
-    downloaded_parquets: List[tuple[MonthPeriod, Path, bool]] = []
-    zones_path_holder: Dict[str, Any] = {}
 
     @dlt.resource(
         name="ingestion_log",
@@ -151,8 +149,6 @@ def nyc_tlc_source(
                     f"({logged['row_count']} zonas). Omitiendo descarga."
                 )
                 zones_is_new = False
-                zones_path_holder["path"] = zones_dest
-                zones_path_holder["is_new"] = False
                 yield {
                     "file_name": zones_file,
                     "url": TLC_ZONE_LOOKUP_URL,
@@ -166,17 +162,14 @@ def nyc_tlc_source(
 
         if zones_is_new:
             try:
-                if not zones_dest.exists():
-                    print(f"[DLT INGESTA] Descargando {TLC_ZONE_LOOKUP_URL} ...")
-                    download_file_with_backoff(
-                        TLC_ZONE_LOOKUP_URL, zones_dest, max_retries, base_wait
-                    )
+                print(f"[DLT INGESTA] Descargando {TLC_ZONE_LOOKUP_URL} ...")
+                download_file_with_backoff(
+                    TLC_ZONE_LOOKUP_URL, zones_dest, max_retries, base_wait
+                )
                 disk_hash = compute_sha256(zones_dest)
                 file_bytes = zones_dest.stat().st_size
                 with open(zones_dest, "rb") as f:
                     row_count = max(0, sum(1 for _ in f) - 1)
-                zones_path_holder["path"] = zones_dest
-                zones_path_holder["is_new"] = True
                 print(f"[DLT INGESTA] Completada '{zones_file}': {row_count} zonas.")
                 yield {
                     "file_name": zones_file,
@@ -222,7 +215,6 @@ def nyc_tlc_source(
                         f"SHA-256 ({disk_hash[:12]}...) coincide ({logged['row_count']:,} filas)."
                     )
                     needs_download = False
-                    downloaded_parquets.append((period, dest_path, False))
                     yield {
                         "file_name": period.file_name,
                         "url": url,
@@ -236,16 +228,12 @@ def nyc_tlc_source(
 
             if needs_download:
                 try:
-                    if not dest_path.exists():
-                        print(f"[DLT INGESTA] Descargando {url} -> {dest_path} ...")
-                        download_file_with_backoff(
-                            url, dest_path, max_retries, base_wait
-                        )
+                    print(f"[DLT INGESTA] Descargando {url} -> {dest_path} ...")
+                    download_file_with_backoff(url, dest_path, max_retries, base_wait)
                     disk_hash = compute_sha256(dest_path)
                     file_bytes = dest_path.stat().st_size
                     row_count = pq.read_metadata(dest_path).num_rows
 
-                    downloaded_parquets.append((period, dest_path, True))
                     print(
                         f"[DLT INGESTA] Completada '{period.file_name}': {row_count:,} filas | "
                         f"{file_bytes / (1024 * 1024):.2f} MB | SHA-256: {disk_hash[:16]}..."
@@ -273,32 +261,49 @@ def nyc_tlc_source(
                     }
                     raise
 
-    @dlt.resource(
+    @dlt.transformer(
+        data_from=ingestion_log_resource,
         name="taxi_zones",
         write_disposition="replace",
     )
-    def taxi_zones_resource():
+    def taxi_zones_resource(log_item: Dict[str, Any]):
         import pyarrow.csv as pv
 
-        zones_dest: Optional[Path] = zones_path_holder.get("path")
-        if zones_dest and zones_dest.exists():
-            yield pv.read_csv(zones_dest)
+        if (
+            log_item.get("file_name") == "taxi_zone_lookup.csv"
+            and log_item.get("status") == "ok"
+        ):
+            zones_dest = raw_base_dir / "zones" / "taxi_zone_lookup.csv"
+            if zones_dest.exists():
+                yield pv.read_csv(zones_dest)
 
-    @dlt.resource(
+    @dlt.transformer(
+        data_from=ingestion_log_resource,
         name="yellow_trips_raw",
         write_disposition="replace",
     )
-    def yellow_trips_raw_resource():
+    def yellow_trips_raw_resource(log_item: Dict[str, Any]):
         """
-        Lee los archivos Parquet descargados en bloques columnares PyArrow de 100,000 filas
-        para que dlt los cargue en DuckDB sin materializar diccionarios en RAM.
+        Recibe cada entrada confirmada de ingestion_log y lee el Parquet en bloques
+        columnares PyArrow de 100,000 filas sin materializar diccionarios en RAM.
         """
-        for period, parquet_path, _ in downloaded_parquets:
-            pf = pq.ParquetFile(parquet_path)
-            for batch in pf.iter_batches(batch_size=100_000):
-                yield (
-                    batch.to_pydict() if False else batch
-                )  # Entrega RecordBatch nativo a dlt
+        file_name = log_item.get("file_name", "")
+        if file_name.startswith("yellow_tripdata_") and log_item.get("status") == "ok":
+            period_str = file_name.replace("yellow_tripdata_", "").replace(
+                ".parquet", ""
+            )
+            year_str, month_str = period_str.split("-")
+            parquet_path = (
+                raw_base_dir
+                / "yellow"
+                / f"year={int(year_str)}"
+                / f"month={int(month_str):02d}"
+                / file_name
+            )
+            if parquet_path.exists():
+                pf = pq.ParquetFile(parquet_path)
+                for batch in pf.iter_batches(batch_size=100_000):
+                    yield batch
 
     return [ingestion_log_resource, taxi_zones_resource, yellow_trips_raw_resource]
 
