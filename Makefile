@@ -3,7 +3,7 @@ PYTHON ?= python3
 
 .PHONY: all up down logs test dbt-test trigger clean
 
-# Levanta toda la plataforma persistente (Dagster + Dozzle + Prometheus + Grafana)
+# Levanta toda la plataforma persistente (Dagster + Dozzle + Prometheus + Grafana + Metabase)
 up:
 	mkdir -p data/dagster_home data/triggers
 	touch RESULTADOS.md
@@ -15,6 +15,7 @@ up:
 	@echo "  - Dozzle Logs: http://localhost:8080"
 	@echo "  - Grafana    : http://localhost:3001"
 	@echo "  - Prometheus : http://localhost:9090"
+	@echo "  - Metabase   : http://localhost:3002"
 
 # Comando único exigido por la consigna: asegura servicios vivos y dispara la corrida
 all: up
