@@ -203,7 +203,7 @@ Se implementaron **9 reglas explícitas** (las 7 obligatorias de la consigna má
 | **R09** | `EXCESSIVE_PASSENGER_COUNT` *(Propia 2)* | **WARNING** | `passenger_count > 6`. Excede la capacidad máxima legal de taxis amarillos regulados por la TLC; se marca como error de tipeo sin descartar el viaje. |
 
 **Invariante de Reconciliación:** En cada ejecución se verifica matemáticamente que:
-$$\text{filas\_leídas} = \text{filas\_aceptadas} + \text{filas\_cuarentena}$$
+$$\text{filas\\_leídas} = \text{filas\\_aceptadas} + \text{filas\\_cuarentena}$$   
 Si existe una diferencia de siquiera 1 registro, el pipeline lanza un `RuntimeError` y detiene la ejecución.
 
 ---
