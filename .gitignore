@@ -12,6 +12,11 @@ data/
 *.duckdb.tmp/
 *.tmp
 
+# Estado persistente de servicios Docker (Dagster, dlt y Metabase)
+data/dagster_home/
+data/metabase/
+.dlt/
+
 # dbt
 dbt-project/target/
 dbt-project/dbt_packages/
