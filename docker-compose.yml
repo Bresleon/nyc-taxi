@@ -77,3 +77,39 @@ services:
     depends_on:
       - prometheus
     mem_limit: 256m
+
+  metabase-init:
+    image: python:3.12-slim
+    container_name: nyc_taxi_metabase_init
+    restart: "no"
+    command: ["sh", "-c", "mkdir -p /metabase-data && chown -R 777 /metabase-data"]
+    volumes:
+      - ./data/metabase:/metabase-data
+
+  metabase:
+    image: ghcr.io/motherduckdb/metabase-duckdb:latest
+    container_name: nyc_taxi_metabase
+    user: "0:0"
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_TOOL_OPTIONS: "-Xmx1024m -Xms512m"
+    volumes:
+      - ./data/metabase:/metabase-data
+      - ./data/warehouse:/data/warehouse:ro
+    mem_limit: 1536m
+
+  metabase-setup:
+    image: python:3.12-slim
+    container_name: nyc_taxi_metabase_setup
+    restart: "no"
+    depends_on:
+      - metabase
+    environment:
+      METABASE_URL: "http://metabase:3000"
+    command: ["python3", "/setup/setup_metabase.py"]
+    volumes:
+      - ./monitoring/metabase/setup_metabase.py:/setup/setup_metabase.py:ro
+      - ./data/warehouse:/data/warehouse:ro
