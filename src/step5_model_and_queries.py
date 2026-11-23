@@ -268,8 +268,20 @@ def run_dbt_transformations(periods: List[MonthPeriod]) -> None:
     if res_run.returncode != 0:
         print(res_run.stdout)
         print(res_run.stderr)
-        raise RuntimeError("Fallo crítico durante 'dbt run'.")
-    print(res_run.stdout)
+        dbt_completed = (
+            "Completed successfully" in res_run.stdout and "ERROR=0" in res_run.stdout
+        )
+        if res_run.returncode < 0 and dbt_completed:
+            print(
+                f"[DBT WARN] 'dbt run' finalizó todos los modelos con éxito, "
+                f"pero el proceso recibió señal {res_run.returncode} al cerrar."
+            )
+        else:
+            raise RuntimeError(
+                f"Fallo crítico durante 'dbt run' (exit={res_run.returncode})."
+            )
+    else:
+        print(res_run.stdout)
 
     print("[DBT] Ejecutando pruebas de integridad dimensional (dbt test)...")
     res_test = subprocess.run(
