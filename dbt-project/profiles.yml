@@ -3,7 +3,11 @@ nyc_taxi_profile:
   outputs:
     dev:
       type: duckdb
-      path: "../data/warehouse/nyc_taxi.duckdb"
-      threads: 4
-      extensions:
-        - parquet
+      path: ../data/warehouse/nyc_taxi.duckdb
+      threads: 1
+      settings:
+        memory_limit: '3GB'
+        preserve_insertion_order: false
+
+config:
+  send_anonymous_usage_stats: false

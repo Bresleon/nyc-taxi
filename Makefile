@@ -18,7 +18,12 @@ up:
 	@echo "  - Metabase   : http://localhost:3002"
 
 # Comando único exigido por la consigna: asegura servicios vivos y dispara la corrida
-all: up
+all:
+	mkdir -p data/dagster_home data/triggers
+	touch RESULTADOS.md
+	docker compose up -d --build
+	docker compose stop metabase
+	trap 'docker compose start metabase' EXIT; \
 	docker compose exec -T dagster bash -c '\
 		echo '\''{"ops":{"raw_taxi_data":{"config":{"mes":"$(MES)"}},"quality_validated_data":{"config":{"mes":"$(MES)"}},"dimensional_star_schema":{"config":{"mes":"$(MES)"}},"business_results_markdown":{"config":{"mes":"$(MES)"}}}}'\'' > /tmp/run_config.json && \
 		dagster job execute -f src/dagster_orchestrator.py -j nyc_taxi_pipeline_job -c /tmp/run_config.json'
@@ -28,7 +33,8 @@ all: up
 trigger:
 	mkdir -p data/triggers
 	touch data/triggers/$(MES).trigger
-	@echo "Archivo disparador data/triggers/$(MES).trigger creado. El sensor de Dagster lo procesará en <=15s."
+	docker compose stop metabase
+	@echo "Disparador creado para $(MES). Cuando el run termine en Dagster UI, reactiva BI con: docker compose start metabase"
 
 test:
 	docker compose exec -T dagster pytest tests/ -v
