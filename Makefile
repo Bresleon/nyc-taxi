@@ -1,12 +1,15 @@
 MES ?= 2025-03
 PYTHON ?= python3
 
-.PHONY: all up down logs test dbt-test trigger clean
+.PHONY: init-dirs all up down logs test dbt-test trigger clean
+
+# Crea toda la estructura de volúmenes en el host con el usuario actual (evita que Docker los cree como root)
+init-dirs:
+	mkdir -p data/raw data/curated data/quarantine data/warehouse data/dagster_home data/triggers data/metabase
+	touch RESULTADOS.md
 
 # Levanta toda la plataforma persistente (Dagster + Dozzle + Prometheus + Grafana + Metabase)
-up:
-	mkdir -p data/dagster_home data/triggers
-	touch RESULTADOS.md
+up: init-dirs
 	docker compose up -d --build
 	@echo "Esperando a que Dagster Webserver esté listo en http://localhost:3000 ..."
 	@until curl -sf http://localhost:3000/server_info > /dev/null; do sleep 2; done
@@ -17,10 +20,8 @@ up:
 	@echo "  - Prometheus : http://localhost:9090"
 	@echo "  - Metabase   : http://localhost:3002"
 
-# Comando único exigido por la consigna: asegura servicios vivos y dispara la corrida
-all:
-	mkdir -p data/dagster_home data/triggers
-	touch RESULTADOS.md
+# Comando único: asegura carpetas con permisos de usuario, servicios vivos y dispara la corrida
+all: init-dirs
 	docker compose up -d --build
 	docker compose stop metabase
 	trap 'docker compose start metabase' EXIT; \
@@ -30,11 +31,10 @@ all:
 	@echo "Corrida completada. Los servicios permanecen vivos para inspección."
 
 # Dispara una corrida reactiva mediante el Sensor de Dagster (sin bloquear terminal)
-trigger:
-	mkdir -p data/triggers
-	touch data/triggers/$(MES).trigger
+trigger: init-dirs
 	docker compose stop metabase
-	@echo "Disparador creado para $(MES). Cuando el run termine en Dagster UI, reactiva BI con: docker compose start metabase"
+	touch data/triggers/$(MES).trigger
+	@echo "Disparador $(MES).trigger creado. Cuando el run termine en Dagster UI, reactiva BI con: docker compose start metabase"
 
 test:
 	docker compose exec -T dagster pytest tests/ -v
@@ -50,4 +50,4 @@ down:
 
 clean:
 	docker compose down -v
-	rm -rf data/ dbt-project/target/ .pytest_cache/
+	rm -rf data/ dbt-project/target/ .pytest_cache/ 2>/dev/null || sudo rm -rf data/ dbt-project/target/ .pytest_cache/
