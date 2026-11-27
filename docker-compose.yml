@@ -15,6 +15,7 @@ services:
       - ./RESULTADOS.md:/opt/dagster/app/RESULTADOS.md
       - ./OBSERVABILIDAD.md:/opt/dagster/app/OBSERVABILIDAD.md
       - ./data/dagster_home:/opt/dagster/dagster_home/storage
+      - ./tests:/opt/dagster/app/tests:ro
     environment:
       - DAGSTER_HOME=/opt/dagster/dagster_home
       - HOME=/tmp
