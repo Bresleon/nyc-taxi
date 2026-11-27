@@ -37,7 +37,7 @@ trigger: init-dirs
 	@echo "Disparador $(MES).trigger creado. Cuando el run termine en Dagster UI, reactiva BI con: docker compose start metabase"
 
 test:
-	docker compose exec -T dagster pytest tests/ -v
+	docker compose exec -T dagster python3 -m pytest tests/ -v
 
 dbt-test:
 	docker compose exec -T dagster bash -c "cd dbt-project && dbt test --profiles-dir ."

@@ -17,6 +17,7 @@ COPY dagster_home/dagster.yaml ${DAGSTER_HOME}/dagster.yaml
 COPY contracts/ ./contracts/
 COPY dbt-project/ ./dbt-project/
 COPY src/ ./src/
+COPY tests/ ./tests/
 
 EXPOSE 3000
 
